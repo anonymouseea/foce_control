@@ -256,7 +256,7 @@ int main() {
 	NRC_RKG_Open(vMax, avMax, jMax); 
 
     
-    double dt =1.0/900.0; 
+    double dt =1.0/800.0; 
     Admittance4::Vec4 M = {130.0, 130.0, 110.0, 5}; 
     Admittance4::Vec4 D = {3000.0, 2000.0, 5000.0, 120};
     Admittance4::Vec4 K = {0.0, 0.0, 0.0, 0.0};
