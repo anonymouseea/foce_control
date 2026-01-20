@@ -1,1 +1,0 @@
-@reboot /bin/bash /home/inexbot/robot/autostart_robot.sh >> /home/inexbot/robot/autostart_robot.cron.log 2>&1
