@@ -8,16 +8,16 @@
 #include <atomic>
 #include "Admittance.h" 
 #include "nrcAPI.h"
-
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
-
+#include "AsyncLogger.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
+AsyncLogger logger;
 
 struct SensorData {
     double fx, fy, fz; // 工具系下的力
@@ -55,6 +55,8 @@ void SystemStartup() {
   NRC_Delayms(200);
 
 }
+
+
 
 
 
@@ -331,9 +333,32 @@ int main() {
     bool last_force_switch = false; 
     bool last_zero_switch = false;
     bool last_remote_switch =false;
+    bool last_servo_ready = false;
+
     
 	while (true)  
     {
+        int servo_ready_val = NRC_ReadBoolVar(4);
+        bool servo_ready_on = (servo_ready_val == 1);
+        // 上升沿：使能伺服
+        if(servo_ready_on && !last_servo_ready)
+        {   
+            NRC_SetServoReadyStatus(1);
+            logger.log("Servo ready status set to 1\n");
+            NRC_ServoEnable();
+        }
+        // 下降沿：禁止伺服，下使能
+        if(!servo_ready_on && last_servo_ready)
+        {
+            NRC_ServoDisable();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            NRC_SetServoReadyStatus(0);
+            logger.log("Servo ready status set to 0, servo disabled\n");
+        }
+
+
+
+
         int remote_sw_val = NRC_ReadBoolVar(3);
         bool remote_sw_on = (remote_sw_val == 1);
         if(remote_sw_on && !last_remote_switch)
@@ -341,6 +366,7 @@ int main() {
             
             int ret = NRC_SetOperationMode(NRC_REMOTE_);
             std::cout <<"远程切换返回值"<< ret <<std::endl;
+            // logger.log("远程切换返回值: " + std::to_string(ret));
         }
         else if(!remote_sw_on && last_remote_switch)
         {
