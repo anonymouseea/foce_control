@@ -10,13 +10,12 @@
 #include <cstring>
 #include <csignal>
 #include <atomic>
-#include <sched.h>          // 实时调度
-#include <sys/mman.h>       // 内存锁定
-#include <time.h>           // 高精度时钟
+#include <sched.h>          
+#include <sys/mman.h>       
+#include <time.h>           
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
-
 #include "Admittance.h" 
 #include "nrcAPI.h"
 #include "AsyncLogger.h"
@@ -25,13 +24,13 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-// 全局运行标志
+
 std::atomic<bool> g_running{true};
 void handle_sigint(int) { g_running = false; }
 
 AsyncLogger logger;
 
-// --- 结构体定义 ---
+
 struct SensorData {
     double fx, fy, fz; 
     double mx, my, mz; 
@@ -42,7 +41,7 @@ struct MyRobotState {
     double theta2, theta4; 
 };
 
-// --- 全局静态变量 ---
+
 static unsigned char* g_force_ptrsda[6] = {nullptr};
 static unsigned char* g_force_ptrsxiao[6] = {nullptr};
 static bool g_is_sensor_ready = false;
@@ -50,14 +49,14 @@ static SensorData g_sensor_offset = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 static SensorData g_sensor_offset_xiao = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 std::array<double, 7> target_joints;
 
-// --- 实时性环境配置函数 ---
+
 bool setup_realtime() {
-    // 1. 锁定内存，防止页交换导致抖动
+  
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
         perror("mlockall failed");
         return false;
     }
-    // 2. 设置线程为 FIFO 实时调度，优先级建议 80
+    
     struct sched_param param;
     param.sched_priority = 80; 
     if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
@@ -69,11 +68,21 @@ bool setup_realtime() {
 
 // --- 系统初始化与传感器读取 ---
 void SystemStartup() {
-    std::cout << "Nexmotion Lib Version: " << NRC_GetNexMotionLibVersion() << std::endl;
-    NRC_StartController();
-    while (NRC_GetControlInitComplete() != 1 ) { NRC_Delayms(100); }
-    NRC_ClearAllError();
-    std::cout << "Controller Started. Sync Version: " << NRC_GetSyncVersion() << std::endl;
+  //输出Nexmotion版本库信息
+  std::cout << "库版本：" << NRC_GetNexMotionLibVersion() << std::endl;
+  //启动控制系统
+  NRC_StartController();
+  //检测控制系统是否初始化完成
+  while (NRC_GetControlInitComplete() != 1 ) {
+    NRC_Delayms(100);   //延时100ms
+  }
+  //清除所有错误
+  NRC_ClearAllError();
+
+  std::cout << "----" << NRC_GetControlInitComplete() << std::endl;
+  std::cout << "StartController Success" << std::endl;
+  std::cout << "获取同步版本号" << NRC_GetSyncVersion() << std::endl;
+  NRC_Delayms(200);
 }
 
 bool init_force_sensor_mapping() {
@@ -89,9 +98,9 @@ bool init_force_sensor_mapping() {
 }
 
 void zero_force_sensor() {
-    logger.log("开始传感器清零 (采样中，请勿触摸机械臂)...\n");
     
-    // 1. 先进行一次“预读”，丢弃可能存在的旧缓冲区数据
+    
+    
     for (int i = 0; i < 10; ++i) {
         if (g_is_sensor_ready) {
             float dummy = *reinterpret_cast<float*>(g_force_ptrsda[0]);
@@ -99,7 +108,7 @@ void zero_force_sensor() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    const int sample_count = 50; // 增加采样次数到 50 次，均值更准
+    const int sample_count = 50; 
     SensorData sum_da = {0, 0, 0, 0, 0, 0};
     SensorData sum_xiao = {0, 0, 0, 0, 0, 0};
 
@@ -124,7 +133,7 @@ void zero_force_sensor() {
         std::this_thread::sleep_for(std::chrono::milliseconds(2)); // 每 2ms 采一个点
     }
 
-    // --- 大量程偏移量计算 (全部字段补全) ---
+    // --- 大量程偏移量计算
     g_sensor_offset.fx = sum_da.fx / sample_count;
     g_sensor_offset.fy = sum_da.fy / sample_count;
     g_sensor_offset.fz = sum_da.fz / sample_count;
@@ -132,7 +141,7 @@ void zero_force_sensor() {
     g_sensor_offset.my = sum_da.my / sample_count;
     g_sensor_offset.mz = sum_da.mz / sample_count;
 
-    // --- 小量程偏移量计算 (全部字段补全) ---
+    // --- 小量程偏移量计算 
     g_sensor_offset_xiao.fx = sum_xiao.fx / sample_count;
     g_sensor_offset_xiao.fy = sum_xiao.fy / sample_count;
     g_sensor_offset_xiao.fz = sum_xiao.fz / sample_count;
@@ -182,16 +191,11 @@ int main() {
     signal(SIGINT, handle_sigint);
     SystemStartup();
 
-    // 开启实时性环境 (需 sudo 运行)
+    
     if (!setup_realtime()) {
         std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
     }
 
-    NRC_RKG_Open({40,40,60,60,20,20,20},
-                 {1500,1500,1500,2000,2000,2000,2000},
-                 {2000,2000,2000,2000,2000,2000,2000});
-
-    // 导纳控制器 1ms 周期
     Admittance4 controller( {130.0, 130.0, 110.0, 5},
                             {3000.0, 3000.0, 5000.0, 120},
                             {0,0,0,0}, 0.001);
@@ -254,23 +258,29 @@ int main() {
         bool force_on = (NRC_ReadBoolVar(1) == 1);
         if (force_on && !last_force_switch) {
 
-            NRC_SetServoReadyStatus(1); 
-            NRC_PowerOn();
+            NRC_RKG_Open({40,40,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
 
+            NRC_ClearAllError();
+            
+            NRC_SetServoReadyStatus(1); 
+
+            NRC_PowerOn();
+            
             zero_force_sensor();
+
             init_s = read_robot_full_state();
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
+            
         }
-
         //关闭力控
-        if (!force_on && last_force_switch) { NRC_PowerOff(); }
+        if (!force_on && last_force_switch) { NRC_RKG_Stop(); NRC_PowerOff(); }
         last_force_switch = force_on;
 
         if (!force_on) continue;
 
-        // 5. 核心算法逻辑 (1ms 执行一次)
+        
         MyRobotState curr_s = read_robot_full_state();
         NRC_Position ref_acs; NRC_GetCurrentPos(NRC_COORD::NRC_ACS, ref_acs);
         SensorData ft = read_force_sensor_da();
@@ -283,7 +293,7 @@ int main() {
         ControlMode target_mode = (NRC_ReadDigInByBoard(1, 1) == 1) ? MODE_ROT : MODE_POS;
         if (target_mode != current_mode) {
             current_mode = target_mode;
-            controller.set_state(last_target_tool, {0,0,0,0}); // 消除切换惯性
+            controller.set_state(last_target_tool, {0,0,0,0}); 
             if (current_mode == MODE_ROT) { active_pos_lock = last_target_tool; locked_rz = curr_s.rz; }
         }
         
@@ -308,6 +318,5 @@ int main() {
         }
     }
 
-    NRC_RKG_Stop();
     return 0;
 }
