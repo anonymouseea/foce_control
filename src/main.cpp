@@ -192,9 +192,9 @@ int main() {
                  {2000,2000,2000,2000,2000,2000,2000});
 
     // 导纳控制器 1ms 周期
-    Admittance4 controller({130.0, 130.0, 110.0, 5},
+    Admittance4 controller( {130.0, 130.0, 110.0, 5},
                             {3000.0, 3000.0, 5000.0, 120},
-                        {0,0,0,0}, 0.001);
+                            {0,0,0,0}, 0.001);
 
     if (!init_force_sensor_mapping()) return -1;
 
@@ -253,15 +253,19 @@ int main() {
         // 4. 力控开关逻辑 (包含使能与重置)
         bool force_on = (NRC_ReadBoolVar(1) == 1);
         if (force_on && !last_force_switch) {
+
             NRC_SetServoReadyStatus(1); 
             NRC_PowerOn();
+
             zero_force_sensor();
             init_s = read_robot_full_state();
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
         }
-        if (!force_on && last_force_switch) { NRC_RKG_Stop(); NRC_PowerOff(); }
+
+        //关闭力控
+        if (!force_on && last_force_switch) { NRC_PowerOff(); }
         last_force_switch = force_on;
 
         if (!force_on) continue;
@@ -282,10 +286,11 @@ int main() {
             controller.set_state(last_target_tool, {0,0,0,0}); // 消除切换惯性
             if (current_mode == MODE_ROT) { active_pos_lock = last_target_tool; locked_rz = curr_s.rz; }
         }
-
+        
         if (current_mode == MODE_POS) ft.mz = 0;
 
         auto result = controller.update({ft.fx, ft.fy, ft.fz, ft.mz});
+        // logger.log("Target Tool Pos: X=" + std::to_string(result.first[0]) + " Y=" + std::to_string(result.first[1]) + " Z=" + std::to_string(result.first[2]) + " Theta=" + std::to_string(result.first[3]) + "\n");
         Admittance4::Vec4 target_tool = result.first;
 
         if (current_mode == MODE_ROT) { target_tool[0] = active_pos_lock[0]; target_tool[1] = active_pos_lock[1]; target_tool[2] = active_pos_lock[2]; }
