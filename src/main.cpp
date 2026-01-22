@@ -241,15 +241,6 @@ int main() {
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_p, NULL);
 
 
-
-        // 远程/示教模式切换
-        bool remote_on = (NRC_ReadBoolVar(3) == 1);
-        if(remote_on != last_remote_switch) {
-            logger.log(std::string("[模式切换] ") + (remote_on ? "远程模式" : "示教模式") + "\n");
-            NRC_SetOperationMode(remote_on ? NRC_REMOTE_ : NRC_TEACH_);
-            last_remote_switch = remote_on;
-        }
-
         // 传感器清零逻辑
         bool zero_on = (NRC_ReadBoolVar(2) == 1);
         if (zero_on && !last_zero_switch) { zero_force_sensor(); }
