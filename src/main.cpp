@@ -24,12 +24,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-
 std::atomic<bool> g_running{true};
 void handle_sigint(int) { g_running = false; }
 
 AsyncLogger logger;
-
 
 struct SensorData {
     double fx, fy, fz; 
@@ -41,7 +39,6 @@ struct MyRobotState {
     double theta2, theta4; 
 };
 
-
 static unsigned char* g_force_ptrsda[6] = {nullptr};
 static unsigned char* g_force_ptrsxiao[6] = {nullptr};
 static bool g_is_sensor_ready = false;
@@ -49,6 +46,8 @@ static SensorData g_sensor_offset = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 static SensorData g_sensor_offset_xiao = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 std::array<double, 7> target_joints;
 
+SensorData ft;
+double dead_zone_f, dead_zone_m; 
 
 bool setup_realtime() {
   
@@ -163,10 +162,15 @@ SensorData read_force_sensor_xiao_raw() {
             (double)*reinterpret_cast<float*>(g_force_ptrsxiao[3]), (double)*reinterpret_cast<float*>(g_force_ptrsxiao[4]), (double)*reinterpret_cast<float*>(g_force_ptrsxiao[5])};
 }
 
+
 // 减去偏移后的数据
 SensorData read_force_sensor_da() {
     SensorData r = read_force_sensor_da_raw();
     return {r.fx - g_sensor_offset.fx, r.fy - g_sensor_offset.fy, r.fz - g_sensor_offset.fz, r.mx - g_sensor_offset.mx, r.my - g_sensor_offset.my, r.mz - g_sensor_offset.mz};
+}
+SensorData read_force_sensor_xiao() {
+    SensorData r = read_force_sensor_xiao_raw();
+    return {r.fx - g_sensor_offset_xiao.fx, r.fy - g_sensor_offset_xiao.fy, r.fz - g_sensor_offset_xiao.fz, r.mx - g_sensor_offset_xiao.mx, r.my - g_sensor_offset_xiao.my, r.mz - g_sensor_offset_xiao.mz};
 }
 
 MyRobotState read_robot_full_state() {
@@ -190,7 +194,6 @@ int main() {
     signal(SIGINT, handle_sigint);
     SystemStartup();
 
-    
     if (!setup_realtime()) {
         std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
     }
@@ -213,7 +216,6 @@ int main() {
 
    
     std::thread force_feedback_thread([](){
-        // 设置本线程为普通优先级，防止抢占Modbus等通信线程
         struct sched_param param;
         param.sched_priority = 0;
         pthread_setschedparam(pthread_self(), SCHED_OTHER, &param);
@@ -238,12 +240,10 @@ int main() {
 
     while (g_running) 
     {
-
         // 设置下一个唤醒时间点 (1ms 周期)
         next_p.tv_nsec += 1000000; 
         while (next_p.tv_nsec >= 1000000000L) { next_p.tv_nsec -= 1000000000L; next_p.tv_sec++; }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_p, NULL);
-
 
         // 传感器清零逻辑
         bool zero_on = (NRC_ReadBoolVar(2) == 1);
@@ -254,11 +254,8 @@ int main() {
         bool force_on = (NRC_ReadBoolVar(1) == 1);
        
         if (force_on && !last_force_switch) {
-
             NRC_SetServoReadyStatus(1); 
-
             NRC_PowerOn();
-
             zero_force_sensor();
             init_s = read_robot_full_state();
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
@@ -274,11 +271,35 @@ int main() {
         
         MyRobotState curr_s = read_robot_full_state();
         NRC_Position ref_acs; NRC_GetCurrentPos(NRC_COORD::NRC_ACS, ref_acs);
-        SensorData ft = read_force_sensor_da();
+
+        SensorData ft_da = read_force_sensor_da();
+        SensorData ft_xiao = read_force_sensor_xiao();
+
+        static bool last_use_small_sensor = false;
+        bool use_small_sensor = (NRC_ReadBoolVar(5) == 1); 
+
+        if (use_small_sensor != last_use_small_sensor) {
+            // 切换传感器时，保持当前位置偏移，将速度置0，防止跳动
+            controller.set_state(last_target_tool, {0,0,0,0});
+            logger.log(std::string("[传感器切换] 使用") + (use_small_sensor ? "小量程" : "大量程") + "传感器\n");
+            last_use_small_sensor = use_small_sensor; 
+        }
+
+        if (use_small_sensor) {
+            ft = ft_xiao;
+            // 小量程传感器的死区
+            dead_zone_f = 1.0; 
+            dead_zone_m = 0.2;
+        } else {
+            ft = ft_da;
+            // 大量程传感器的死区
+            dead_zone_f = 2.0;
+            dead_zone_m = 0.5;
+        }
 
         // 滤波与死区
-        if (std::abs(ft.fx) < 2.0) ft.fx = 0; if (std::abs(ft.fy) < 2.0) ft.fy = 0;
-        if (std::abs(ft.fz) < 2.0) ft.fz = 0; if (std::abs(ft.mz) < 0.5) ft.mz = 0;
+        if (std::abs(ft.fx) < dead_zone_f) ft.fx = 0; if (std::abs(ft.fy) < dead_zone_f) ft.fy = 0;
+        if (std::abs(ft.fz) < dead_zone_f) ft.fz = 0; if (std::abs(ft.mz) < dead_zone_m) ft.mz = 0;
 
         // 模式切换 (IO 1.1)
         ControlMode target_mode = (NRC_ReadDigInByBoard(1, 1) == 1) ? MODE_ROT : MODE_POS;
