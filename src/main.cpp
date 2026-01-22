@@ -66,24 +66,24 @@ bool setup_realtime() {
     return true;
 }
 
-// // --- 系统初始化与传感器读取 ---
-// void SystemStartup() {
-//   //输出Nexmotion版本库信息
-//   std::cout << "库版本：" << NRC_GetNexMotionLibVersion() << std::endl;
-//   //启动控制系统
-//   NRC_StartController();
-//   //检测控制系统是否初始化完成
-//   while (NRC_GetControlInitComplete() != 1 ) {
-//     NRC_Delayms(100);   //延时100ms
-//   }
-//   //清除所有错误
-//   NRC_ClearAllError();
+// --- 系统初始化与传感器读取 ---
+void SystemStartup() {
+  //输出Nexmotion版本库信息
+  std::cout << "库版本：" << NRC_GetNexMotionLibVersion() << std::endl;
+  //启动控制系统
+  NRC_StartController();
+  //检测控制系统是否初始化完成
+  while (NRC_GetControlInitComplete() != 1 ) {
+    NRC_Delayms(100);   //延时100ms
+  }
+  //清除所有错误
+  NRC_ClearAllError();
 
-//   std::cout << "----" << NRC_GetControlInitComplete() << std::endl;
-//   std::cout << "StartController Success" << std::endl;
-//   std::cout << "获取同步版本号" << NRC_GetSyncVersion() << std::endl;
-//   NRC_Delayms(200);
-// }
+  std::cout << "----" << NRC_GetControlInitComplete() << std::endl;
+  std::cout << "StartController Success" << std::endl;
+  std::cout << "获取同步版本号" << NRC_GetSyncVersion() << std::endl;
+  NRC_Delayms(200);
+}
 
 bool init_force_sensor_mapping() {
     unsigned short index = 0x6030;
