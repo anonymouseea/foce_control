@@ -190,9 +190,13 @@ bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, doubl
     return (NRC_MCStoACS(ref_acs, posMCS, res) == 0);
 }
 
-int main() {
-    signal(SIGINT, handle_sigint);
+int main() 
+{
+
     SystemStartup();
+    
+    signal(SIGINT, handle_sigint); // 放在系统启动后，防止库函数覆盖信号处理
+
 
     if (!setup_realtime()) {
         std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
@@ -254,16 +258,20 @@ int main() {
         bool force_on = (NRC_ReadBoolVar(1) == 1);
        
         if (force_on && !last_force_switch) {
+            zero_force_sensor();
+
             NRC_SetServoReadyStatus(1); 
             NRC_PowerOn();
-            zero_force_sensor();
+
+            NRC_RKG_Open({40,40,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
+            
             init_s = read_robot_full_state();
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
         }
         //关闭力控
-        if (!force_on && last_force_switch) { NRC_PowerOff(); }
+        if (!force_on && last_force_switch) {NRC_RKG_Stop(); NRC_PowerOff(); }
         last_force_switch = force_on;
 
         if (!force_on) continue;

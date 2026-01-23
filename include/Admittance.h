@@ -3,8 +3,8 @@
 #include <array>
 #include <utility>
 
-// 4-DOF 导纳控制器 (X, Y, Z, RotationZ)
-// 适用于 PRPR 结构或 SCARA 类机器人
+
+
 class Admittance4 {
 public:
     // 0-2: x, y, z (m)
