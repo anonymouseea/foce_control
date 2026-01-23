@@ -65,9 +65,8 @@ bool setup_realtime() {
     return true;
 }
 
-// --- 系统初始化与传感器读取 ---
+// 系统初始化
 void SystemStartup() {
-  //输出Nexmotion版本库信息
   std::cout << "库版本：" << NRC_GetNexMotionLibVersion() << std::endl;
   //启动控制系统
   NRC_StartController();
@@ -77,7 +76,6 @@ void SystemStartup() {
   }
   //清除所有错误
   NRC_ClearAllError();
-
   std::cout << "----" << NRC_GetControlInitComplete() << std::endl;
   std::cout << "StartController Success" << std::endl;
   std::cout << "获取同步版本号" << NRC_GetSyncVersion() << std::endl;
@@ -195,8 +193,7 @@ int main()
 
     SystemStartup();
     
-    signal(SIGINT, handle_sigint); // 放在系统启动后，防止库函数覆盖信号处理
-
+    signal(SIGINT, handle_sigint); 
 
     if (!setup_realtime()) {
         std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
@@ -258,24 +255,23 @@ int main()
         bool force_on = (NRC_ReadBoolVar(1) == 1);
        
         if (force_on && !last_force_switch) {
-            zero_force_sensor();
 
+            NRC_ClearAllError();
+            zero_force_sensor();
             NRC_SetServoReadyStatus(1); 
             NRC_PowerOn();
-
-            NRC_RKG_Open({40,40,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
-            
             init_s = read_robot_full_state();
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
+            NRC_RKG_Open({40,40,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
+
         }
         //关闭力控
         if (!force_on && last_force_switch) {NRC_RKG_Stop(); NRC_PowerOff(); }
         last_force_switch = force_on;
 
         if (!force_on) continue;
-
         
         MyRobotState curr_s = read_robot_full_state();
         NRC_Position ref_acs; NRC_GetCurrentPos(NRC_COORD::NRC_ACS, ref_acs);
@@ -334,6 +330,16 @@ int main()
         NRC_Position ik_res;
         if (perform_ik(ref_acs, base_x + dx, base_y + dy, base_z + target_tool[2], initial_total_rz, ik_res)) {
             target_joints = {ik_res.pos[0], ik_res.pos[1], ik_res.pos[2], (base_t4 + target_tool[3]) * 180.0/M_PI, 0, 0, 0};
+            //限位保护
+            if(target_joints[0]<-44 || target_joints[0]>44 ||
+               target_joints[1]<-840 || target_joints[1]>1148 ||
+               target_joints[2]<5 || target_joints[2]>848 ||
+               target_joints[3]<-60 || target_joints[3]>60 )
+            {
+                NRC_SetBoolVar(1,0); // 关闭力控开关
+                NRC_SetBoolVar(4,1); // 触发限位报警
+                continue;
+            }
             NRC_Set_ServoJ_Pos(target_joints);
         }
     }
