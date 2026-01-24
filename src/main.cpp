@@ -9,13 +9,12 @@
 #include <chrono>
 #include <csignal>
 #include <atomic>
-#include <sched.h>          // 实时调度
-#include <sys/mman.h>       // 内存锁定
-#include <time.h>           // 高精度时钟
+#include <sched.h>          
+#include <sys/mman.h>       
+#include <time.h>           
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
-
 #include "Admittance.h" 
 #include "nrcAPI.h"
 #include "AsyncLogger.h"
@@ -29,15 +28,9 @@ void handle_sigint(int) { g_running = false; }
 
 AsyncLogger logger;
 
-struct SensorData {
-    double fx, fy, fz; 
-    double mx, my, mz; 
-};
+struct SensorData {double fx, fy, fz; double mx, my, mz; };
 
-struct MyRobotState {
-    double x, y, z, rz; 
-    double theta2, theta4; 
-};
+struct MyRobotState {double x, y, z, rz; double theta2, theta4; };
 
 static unsigned char* g_force_ptrsda[6] = {nullptr};
 static unsigned char* g_force_ptrsxiao[6] = {nullptr};
@@ -45,17 +38,16 @@ static bool g_is_sensor_ready = false;
 static SensorData g_sensor_offset = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 static SensorData g_sensor_offset_xiao = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 std::array<double, 7> target_joints;
-
 SensorData ft;
 double dead_zone_f, dead_zone_m; 
 
+
+// 设置实时优先级
 bool setup_realtime() {
-  
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == -1) {
         perror("mlockall failed");
         return false;
     }
-    
     struct sched_param param;
     param.sched_priority = 80; 
     if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
@@ -68,13 +60,10 @@ bool setup_realtime() {
 // 系统初始化
 void SystemStartup() {
   std::cout << "库版本：" << NRC_GetNexMotionLibVersion() << std::endl;
-  //启动控制系统
   NRC_StartController();
-  //检测控制系统是否初始化完成
   while (NRC_GetControlInitComplete() != 1 ) {
-    NRC_Delayms(100);   //延时100ms
+    NRC_Delayms(100);   
   }
-  //清除所有错误
   NRC_ClearAllError();
   std::cout << "----" << NRC_GetControlInitComplete() << std::endl;
   std::cout << "StartController Success" << std::endl;
@@ -82,6 +71,7 @@ void SystemStartup() {
   NRC_Delayms(200);
 }
 
+// 初始化传感器映射
 bool init_force_sensor_mapping() {
     unsigned short index = 0x6030;
     bool allSuccess = true;
@@ -94,6 +84,7 @@ bool init_force_sensor_mapping() {
     return allSuccess;
 }
 
+// 传感器清零函数
 void zero_force_sensor() {
     logger.log("开始传感器清零 (采样中，请勿触摸机械臂)...\n");
     
@@ -148,12 +139,13 @@ void zero_force_sensor() {
     logger.log("传感器清零完成。" );
 }
 
-// 原始数据获取函数
+// 大量程传感器原始数据获取函数
 SensorData read_force_sensor_da_raw() {
     if (!g_is_sensor_ready) return {0,0,0,0,0,0};
     return {(double)*reinterpret_cast<float*>(g_force_ptrsda[0]), (double)*reinterpret_cast<float*>(g_force_ptrsda[1]), (double)*reinterpret_cast<float*>(g_force_ptrsda[2]),
             (double)*reinterpret_cast<float*>(g_force_ptrsda[3]), (double)*reinterpret_cast<float*>(g_force_ptrsda[4]), (double)*reinterpret_cast<float*>(g_force_ptrsda[5])};
 }
+// 小量程传感器原始数据获取
 SensorData read_force_sensor_xiao_raw() {
     if (!g_is_sensor_ready) return {0,0,0,0,0,0};
     return {(double)*reinterpret_cast<float*>(g_force_ptrsxiao[0]), (double)*reinterpret_cast<float*>(g_force_ptrsxiao[1]), (double)*reinterpret_cast<float*>(g_force_ptrsxiao[2]),
@@ -161,16 +153,17 @@ SensorData read_force_sensor_xiao_raw() {
 }
 
 
-// 减去偏移后的数据
+//大量程传感器减去偏移后的数据
 SensorData read_force_sensor_da() {
     SensorData r = read_force_sensor_da_raw();
     return {r.fx - g_sensor_offset.fx, r.fy - g_sensor_offset.fy, r.fz - g_sensor_offset.fz, r.mx - g_sensor_offset.mx, r.my - g_sensor_offset.my, r.mz - g_sensor_offset.mz};
 }
+//小传感器减去偏移后的数据
 SensorData read_force_sensor_xiao() {
     SensorData r = read_force_sensor_xiao_raw();
     return {r.fx - g_sensor_offset_xiao.fx, r.fy - g_sensor_offset_xiao.fy, r.fz - g_sensor_offset_xiao.fz, r.mx - g_sensor_offset_xiao.mx, r.my - g_sensor_offset_xiao.my, r.mz - g_sensor_offset_xiao.mz};
 }
-
+// 读取机器人完整状态
 MyRobotState read_robot_full_state() {
     MyRobotState state = {0};
     NRC_Position mcsPos, acsPos;
@@ -182,7 +175,7 @@ MyRobotState read_robot_full_state() {
     }
     return state;
 }
-
+//逆解函数
 bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, double rz_rad, NRC_Position& res) {
     NRC_Position posMCS(NRC_COORD::NRC_MCS, x_m*1000.0, y_m*1000.0, z_m*1000.0, 3.14159, 0, rz_rad);
     return (NRC_MCStoACS(ref_acs, posMCS, res) == 0);
@@ -190,32 +183,35 @@ bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, doubl
 
 int main() 
 {
-
+    //系统启动
     SystemStartup();
     
     signal(SIGINT, handle_sigint); 
-
+    // 设置实时优先级
     if (!setup_realtime()) {
         std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
     }
-
+    // 创建 Admittance 控制器实例 M、D、K 参数
     Admittance4 controller( {130.0, 130.0, 110.0, 5},
                             {3000.0, 3000.0, 5000.0, 120},
                             {0,0,0,0}, 0.001);
-
+    // 初始化传感器映射
     if (!init_force_sensor_mapping()) return -1;
 
+    //传感器首次清零
     zero_force_sensor();
 
+    // 读取初始位置
     MyRobotState init_s = read_robot_full_state();
     double base_x = init_s.x, base_y = init_s.y, base_z = init_s.z, base_t4 = init_s.theta4, initial_total_rz = init_s.rz;
 
+    // 控制模式枚举
     enum ControlMode { MODE_POS, MODE_ROT };
     ControlMode current_mode = MODE_POS;
     Admittance4::Vec4 last_target_tool = {0,0,0,0}, active_pos_lock = {0,0,0,0};
     double locked_rz = 0.0;
 
-   
+    // 力反馈数据更新线程(用于给示教器通信)
     std::thread force_feedback_thread([](){
         struct sched_param param;
         param.sched_priority = 0;
@@ -253,7 +249,6 @@ int main()
 
         // 控开关逻辑 
         bool force_on = (NRC_ReadBoolVar(1) == 1);
-       
         if (force_on && !last_force_switch) {
 
             NRC_ClearAllError();
@@ -270,7 +265,6 @@ int main()
         //关闭力控
         if (!force_on && last_force_switch) {NRC_RKG_Stop(); NRC_PowerOff(); }
         last_force_switch = force_on;
-
         if (!force_on) continue;
         
         MyRobotState curr_s = read_robot_full_state();
@@ -279,9 +273,9 @@ int main()
         SensorData ft_da = read_force_sensor_da();
         SensorData ft_xiao = read_force_sensor_xiao();
 
+        // 传感器切换
         static bool last_use_small_sensor = false;
         bool use_small_sensor = (NRC_ReadBoolVar(5) == 1); 
-
         if (use_small_sensor != last_use_small_sensor) {
             // 切换传感器时，保持当前位置偏移，将速度置0，防止跳动
             controller.set_state(last_target_tool, {0,0,0,0});
@@ -340,6 +334,7 @@ int main()
                 NRC_SetBoolVar(4,1); // 触发限位报警
                 continue;
             }
+            //关节透传接口
             NRC_Set_ServoJ_Pos(target_joints);
         }
     }
