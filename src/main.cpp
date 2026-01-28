@@ -15,11 +15,16 @@
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <fstream>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
 
 #include "Admittance.h" 
 #include "nrcAPI.h"
 #include "AsyncLogger.h"
 
+#include <sys/stat.h>
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -91,7 +96,7 @@ bool init_force_sensor_mapping() {
         if(!g_force_ptrsda[i] || !g_force_ptrsxiao[i]) allSuccess = false;
     }
     if (allSuccess) g_is_sensor_ready = true;
-    return allSuccess;
+    return allSuccess;  
 }
 
 void zero_force_sensor() {
@@ -188,24 +193,54 @@ bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, doubl
     return (NRC_MCStoACS(ref_acs, posMCS, res) == 0);
 }
 
+static std::string MakeLogFileName() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm_val;
+    localtime_r(&t, &tm_val);
+    char buf[32] = {0};
+    std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_val);
+    std::ostringstream oss;
+    oss << "szl_log/run_" << buf << ".log";
+    return oss.str();
+}
+
+// 统一初始化入口
+bool InitializeSystem() {
+    logger.log("[INIT] System startup begin\n");
+    SystemStartup();
+
+    const std::string log_file = MakeLogFileName();
+    // 确保日志目录存在（相对路径：程序当前工作目录下的 szl_log/）
+    ::mkdir("szl_log", 0755);
+    logger.setLogFile(log_file);
+    logger.log(std::string("[LOG] file=") + log_file);
+
+    signal(SIGINT, handle_sigint); 
+    
+    if (!init_force_sensor_mapping()) {
+        logger.log("[INIT] init_force_sensor_mapping failed\n");
+        return false;
+    }
+
+    zero_force_sensor();
+    // 设置示教模式
+    NRC_SetOperationMode(NRC_TEACH_);
+    
+    return true;
+}
+
+
 int main() 
 {
 
-    SystemStartup();
-    
-    signal(SIGINT, handle_sigint); 
-
-    if (!setup_realtime()) {
-        std::cerr << "Warning: Failed to set RT priority. Precision may be affected." << std::endl;
+    if (!InitializeSystem()) {
+        logger.log("[INIT] InitializeSystem failed, exit\n");
+        return -1;
     }
 
     Admittance4 controller( {130.0, 130.0, 110.0, 5},
                             {3000.0, 3000.0, 5000.0, 120},
                             {0,0,0,0}, 0.001);
-
-    if (!init_force_sensor_mapping()) return -1;
-
-    zero_force_sensor();
 
     MyRobotState init_s = read_robot_full_state();
     double base_x = init_s.x, base_y = init_s.y, base_z = init_s.z, base_t4 = init_s.theta4, initial_total_rz = init_s.rz;
@@ -255,7 +290,8 @@ int main()
         bool force_on = (NRC_ReadBoolVar(1) == 1);
        
         if (force_on && !last_force_switch) {
-
+            
+            logger.log("[CONTROL] Force control enabled\n");
             NRC_ClearAllError();
             zero_force_sensor();
             NRC_SetServoReadyStatus(1); 
@@ -268,9 +304,8 @@ int main()
 
         }
         //关闭力控
-        if (!force_on && last_force_switch) {NRC_RKG_Stop(); NRC_PowerOff(); }
+        if (!force_on && last_force_switch) {logger.log("[CONTROL] Force control disabled\n"); NRC_RKG_Stop(); NRC_PowerOff(); }
         last_force_switch = force_on;
-
         if (!force_on) continue;
         
         MyRobotState curr_s = read_robot_full_state();
@@ -279,12 +314,13 @@ int main()
         SensorData ft_da = read_force_sensor_da();
         SensorData ft_xiao = read_force_sensor_xiao();
 
+        // 传感器切换逻辑
         static bool last_use_small_sensor = false;
         bool use_small_sensor = (NRC_ReadBoolVar(5) == 1); 
-
         if (use_small_sensor != last_use_small_sensor) {
             // 切换传感器时，保持当前位置偏移，将速度置0，防止跳动
             controller.set_state(last_target_tool, {0,0,0,0});
+            
             logger.log(std::string("[传感器切换] 使用") + (use_small_sensor ? "小量程" : "大量程") + "传感器\n");
             last_use_small_sensor = use_small_sensor; 
         }
@@ -309,6 +345,7 @@ int main()
         ControlMode target_mode = (NRC_ReadDigInByBoard(1, 1) == 1) ? MODE_ROT : MODE_POS;
         if (target_mode != current_mode) {
             current_mode = target_mode;
+            logger.log(std::string("[MODE] Switched to ") + (current_mode == MODE_ROT ? "ROT" : "POS") + " mode\n");
             controller.set_state(last_target_tool, {0,0,0,0}); 
             if (current_mode == MODE_ROT) { active_pos_lock = last_target_tool; locked_rz = curr_s.rz; }
         }
@@ -316,7 +353,6 @@ int main()
         if (current_mode == MODE_POS) ft.mz = 0;
 
         auto result = controller.update({ft.fx, ft.fy, ft.fz, ft.mz});
-        // logger.log("Target Tool Pos: X=" + std::to_string(result.first[0]) + " Y=" + std::to_string(result.first[1]) + " Z=" + std::to_string(result.first[2]) + " Theta=" + std::to_string(result.first[3]) + "\n");
         Admittance4::Vec4 target_tool = result.first;
 
         if (current_mode == MODE_ROT) { target_tool[0] = active_pos_lock[0]; target_tool[1] = active_pos_lock[1]; target_tool[2] = active_pos_lock[2]; }
@@ -330,16 +366,6 @@ int main()
         NRC_Position ik_res;
         if (perform_ik(ref_acs, base_x + dx, base_y + dy, base_z + target_tool[2], initial_total_rz, ik_res)) {
             target_joints = {ik_res.pos[0], ik_res.pos[1], ik_res.pos[2], (base_t4 + target_tool[3]) * 180.0/M_PI, 0, 0, 0};
-            //限位保护
-            if(target_joints[0]<-44 || target_joints[0]>44 ||
-               target_joints[1]<-840 || target_joints[1]>1148 ||
-               target_joints[2]<5 || target_joints[2]>848 ||
-               target_joints[3]<-60 || target_joints[3]>60 )
-            {
-                NRC_SetBoolVar(1,0); // 关闭力控开关
-                NRC_SetBoolVar(4,1); // 触发限位报警
-                continue;
-            }
             NRC_Set_ServoJ_Pos(target_joints);
         }
     }
