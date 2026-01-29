@@ -4674,7 +4674,7 @@ int NRC_WeldState(NRC_WeldStateParam& param);
  * @param amax 每个轴加速度约束 单位 度/秒^2
  * @param jmax 每个轴加加速度约束 单位 度/秒^3
  */
-int NRC_RKG_Open(std::vector<double> vmax, std::vector<double> amax, std::vector<double> jmax);
+int NRC_RKG_Open(const std::array<double, 7>& vmax, const std::array<double, 7>& amax, const std::array<double, 7>& jmax);
 
 
 /**
