@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <sched.h>
 #include <sys/mman.h>
+#include <dirent.h>
+#include <string>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -138,7 +140,13 @@ SensorData read_force_sensor_da() {
 
 SensorData read_force_sensor_xiao() {
     SensorData r = read_force_sensor_xiao_raw();
-    return {r.fx - g_sensor_offset_xiao.fx, r.fy - g_sensor_offset_xiao.fy, r.fz - g_sensor_offset_xiao.fz, r.mx - g_sensor_offset_xiao.mx, r.my - g_sensor_offset_xiao.my, r.mz - g_sensor_offset_xiao.mz};
+    // 小量程传感器 X,Y 轴方向与实际（或大量程）相反，做符号翻转
+    return {-(r.fx - g_sensor_offset_xiao.fx),
+            r.fy - g_sensor_offset_xiao.fy,
+            r.fz - g_sensor_offset_xiao.fz,
+            r.mx - g_sensor_offset_xiao.mx,
+            r.my - g_sensor_offset_xiao.my,
+            r.mz - g_sensor_offset_xiao.mz};
 }
 
 MyRobotState read_robot_full_state() {
@@ -159,12 +167,40 @@ bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, doubl
 }
 
 std::string MakeLogFileName() {
-    std::time_t t = std::time(nullptr);
-    std::tm tm_val;
-    localtime_r(&t, &tm_val);
-    char buf[32] = {0};
-    std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_val);
+    int max_id = 0;
+    DIR *dir;
+    struct dirent *ent;
+    
+    // 遍历目录查找当前最大的序号
+    if ((dir = opendir("szl_log")) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            std::string fname = ent->d_name;
+            std::string prefix = "run_";
+            std::string suffix = ".log";
+            
+            // 检查文件名是否以 run_ 开头，以 .log 结尾
+            if (fname.length() > prefix.length() + suffix.length() &&
+                fname.compare(0, prefix.length(), prefix) == 0 &&
+                fname.compare(fname.length() - suffix.length(), suffix.length(), suffix) == 0) {
+                
+                std::string num_part = fname.substr(prefix.length(), fname.length() - prefix.length() - suffix.length());
+                
+                // 关键：如果包含 '_'，说明是旧的时间戳格式(run_YYYY_MM...)，忽略它
+                if (num_part.find('_') != std::string::npos) {
+                    continue;
+                }
+                
+                // 尝试解析纯数字序号
+                try {
+                    int id = std::stoi(num_part);
+                    if (id > max_id) max_id = id;
+                } catch (...) {}
+            }
+        }
+        closedir(dir);
+    }
+    
     std::ostringstream oss;
-    oss << "szl_log/run_" << buf << ".log";
+    oss << "szl_log/run_" << (max_id + 1) << ".log";
     return oss.str();
 }

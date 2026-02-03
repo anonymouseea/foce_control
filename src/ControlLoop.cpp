@@ -15,7 +15,7 @@
 #endif
 
 void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
-    Admittance4 controller({130.0, 130.0, 110.0, 5},
+    Admittance4 controller({130.0, 130.0, 120.0, 5},
                            {3000.0, 2500.0, 5000.0, 120},
                            {0, 0, 0, 0}, 0.001);
 
@@ -52,6 +52,8 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
     // --- 高精度硬实时循环起始 ---
     struct timespec next_p;
     clock_gettime(CLOCK_MONOTONIC, &next_p);
+
+    // NRC_SetBoolVar(5,1); // 默认使用小量程传感器
 
     SensorData ft{};
     double dead_zone_f = 0.0, dead_zone_m = 0.0;
@@ -145,6 +147,17 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
         NRC_Position ik_res;
         if (perform_ik(ref_acs, base_x + dx, base_y + dy, base_z + target_tool[2], initial_total_rz, ik_res)) {
             target_joints = {ik_res.pos[0], ik_res.pos[1], ik_res.pos[2], (base_t4 + target_tool[3]) * 180.0/M_PI, 0, 0, 0};
+            //限位保护
+            if(target_joints[0]<-44 || target_joints[0]>44 ||
+               target_joints[1]<-840 || target_joints[1]>1148 ||
+               target_joints[2]<5 || target_joints[2]>848 ||
+               target_joints[3]<-60 || target_joints[3]>60 )
+            {
+                NRC_SetBoolVar(4,1); // 触发限位报警
+                NRC_SetBoolVar(1,0); // 关闭力控开关
+                logger.log("[ERROR] Joint limits exceeded! Force control disabled.\n");
+                continue;
+            }
             NRC_Set_ServoJ_Pos(target_joints);
         }
     }
