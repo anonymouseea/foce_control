@@ -42,7 +42,7 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             SensorData data_da = read_force_sensor_da_raw();
             NRC_SetDoubleVar(13, data_da.fx); NRC_SetDoubleVar(14, data_da.fy); NRC_SetDoubleVar(15, data_da.fz);
             NRC_SetDoubleVar(16, data_da.mx); NRC_SetDoubleVar(17, data_da.my); NRC_SetDoubleVar(18, data_da.mz);
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
     });
     force_feedback_thread.detach();
@@ -53,14 +53,16 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
     struct timespec next_p;
     clock_gettime(CLOCK_MONOTONIC, &next_p);
 
-    // NRC_SetBoolVar(5,1); // 默认使用小量程传感器
-
     SensorData ft{};
     double dead_zone_f = 0.0, dead_zone_m = 0.0;
 
     while (running) {
-        // 设置下一个唤醒时间点 (1ms 周期)
-        next_p.tv_nsec += 1000000;
+        // 判断当前是否力控开启，动态调整周期
+        bool force_on = (NRC_ReadBoolVar(1) == 1);
+        int cycle_ns = force_on ? 1000000 : 10000000; // 力控时1ms, 否则10ms
+
+        // 设置下一个唤醒时间点
+        next_p.tv_nsec += cycle_ns;
         while (next_p.tv_nsec >= 1000000000L) { next_p.tv_nsec -= 1000000000L; next_p.tv_sec++; }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_p, NULL);
 
@@ -70,7 +72,7 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
         last_zero_switch = zero_on;
 
         // 控开关逻辑
-        bool force_on = (NRC_ReadBoolVar(1) == 1);
+        force_on = (NRC_ReadBoolVar(1) == 1); // 再次获取，保证后续逻辑一致
         if (force_on && !last_force_switch) {
             logger.log("[CONTROL] Force control enabled\n");
             NRC_ClearAllError();
@@ -155,7 +157,7 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             {
                 NRC_SetBoolVar(4,1); // 触发限位报警
                 NRC_SetBoolVar(1,0); // 关闭力控开关
-                logger.log("[ERROR] Joint limits exceeded! Force control disabled.\n");
+                logger.log("[ERROR] 关节超限，力控关闭.\n");
                 continue;
             }
             NRC_Set_ServoJ_Pos(target_joints);

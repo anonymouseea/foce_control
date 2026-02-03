@@ -3,8 +3,6 @@
 #include <array>
 #include <utility>
 
-
-
 class Admittance4 {
 public:
     // 0-2: x, y, z (m)
