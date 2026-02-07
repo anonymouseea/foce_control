@@ -16,7 +16,7 @@
 
 void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
     Admittance4 controller({130.0, 130.0, 120.0, 5},
-                           {3000.0, 2500.0, 5000.0, 120},
+                           {4000.0, 3000.0, 5000.0, 120},
                            {0, 0, 0, 0}, 0.001);
 
     MyRobotState init_s = read_robot_full_state();
@@ -83,7 +83,7 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             base_x = init_s.x; base_y = init_s.y; base_z = init_s.z; base_t4 = init_s.theta4; initial_total_rz = init_s.rz;
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
-            NRC_RKG_Open({40,40,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
+            NRC_RKG_Open({60,60,60,60,20,20,20},{1500,1500,1500,2000,2000,2000,2000},{2000,2000,2000,2000,2000,2000,2000});
         }
 
         // 关闭力控
