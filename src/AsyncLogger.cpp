@@ -40,7 +40,7 @@ static std::string MakeTimestamp() {
     oss << buf << '.' << std::setfill('0') << std::setw(3) << ms.count();
     return oss.str();
 }
-
+//若要关闭日志将其改为空函数(void)msg;同时注释logger.setLogFile(log_file)
 void AsyncLogger::log(const std::string& msg) {
     std::lock_guard<std::mutex> lock(mtx);
     logQueue.push(msg);

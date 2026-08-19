@@ -149,16 +149,29 @@ SensorData read_force_sensor_xiao() {
             r.mz - g_sensor_offset_xiao.mz};
 }
 
-MyRobotState read_robot_full_state() {
-    MyRobotState state = {0};
-    NRC_Position mcsPos, acsPos;
-    if (NRC_GetCurrentPos(NRC_COORD::NRC_MCS, mcsPos) == 0) {
-        state.x = mcsPos.pos[0]/1000.0; state.y = mcsPos.pos[1]/1000.0; state.z = mcsPos.pos[2]/1000.0; state.rz = mcsPos.pos[5];
+bool read_robot_full_state(MyRobotState& state) {
+    NRC_Position mcs_position;
+    NRC_Position acs_position;
+
+    if (NRC_GetCurrentPos(NRC_COORD::NRC_MCS, mcs_position) != 0) {
+        return false;
     }
-    if (NRC_GetCurrentPos(NRC_COORD::NRC_ACS, acsPos) == 0) {
-        state.theta2 = acsPos.pos[0] * (M_PI / 180.0); state.theta4 = acsPos.pos[3] * (M_PI / 180.0);
+
+    if (NRC_GetCurrentPos(NRC_COORD::NRC_ACS, acs_position) != 0) {
+        return false;
     }
-    return state;
+
+    MyRobotState new_state = {0};
+    new_state.x = mcs_position.pos[0] / 1000.0;
+    new_state.y = mcs_position.pos[1] / 1000.0;
+    new_state.z = mcs_position.pos[2] / 1000.0;
+    new_state.rz = mcs_position.pos[5];
+    new_state.theta2 = acs_position.pos[0] * (M_PI / 180.0);
+    new_state.theta4 = acs_position.pos[3] * (M_PI / 180.0);
+
+    // 两种坐标均读取成功后才更新输出，避免返回部分有效的状态。
+    state = new_state;
+    return true;
 }
 
 bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, double rz_rad, NRC_Position& res) {

@@ -9,10 +9,15 @@ public:
     // 3:   theta (rad)
     using Vec4 = std::array<double, 4>;
 
-    // 构造函数：传入 4 维的 M, D, K 参数
-    Admittance4(const Vec4& M, const Vec4& D, const Vec4& K, double dt);
+    // 构造函数：传入四维质量、阻尼、刚度、速度上限和控制周期
+    Admittance4(
+        const Vec4& M,
+        const Vec4& D,
+        const Vec4& K,
+        const Vec4& max_velocity,
+        double dt);
 
-    // 设置当前状态和期望状态
+    // 重置导纳位置和期望位置，同时将导纳速度清零
     void set_state(const Vec4& x, const Vec4& xdesir);
 
     // 计算误差：x_e = x_desire - x
@@ -34,6 +39,7 @@ private:
     Vec4 M_;
     Vec4 D_;
     Vec4 K_;
+    Vec4 max_velocity_;
     double dt_{0.0};
 
     // 状态

@@ -1,6 +1,15 @@
-TARGET=nrc2.out
-all :
-	g++-4.8 -m32 -o nrc2.out src/*.cpp -I./include -L./lib -lNexRob -lpthread -lm -ldl -lrt -std=c++11
+TARGET := nrc2.out
+CXX := g++
+SOURCES := $(wildcard src/*.cpp)
 
-clean :
-	rm $(TARGET) $(objects)
+all: $(TARGET)
+
+$(TARGET): $(SOURCES)
+	$(CXX) -m32 -no-pie -std=c++11 \
+		-o $(TARGET) $(SOURCES) \
+		-I./include \
+		-L./lib \
+		-lNexRob -lpthread -lm -ldl -lrt
+
+clean:
+	rm -f $(TARGET)

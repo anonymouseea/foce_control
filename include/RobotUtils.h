@@ -26,7 +26,7 @@ SensorData read_force_sensor_xiao_raw();
 SensorData read_force_sensor_da();
 SensorData read_force_sensor_xiao();
 
-MyRobotState read_robot_full_state();
+bool read_robot_full_state(MyRobotState& state);
 bool perform_ik(NRC_Position& ref_acs, double x_m, double y_m, double z_m, double rz_rad, NRC_Position& res);
 
 std::string MakeLogFileName();
