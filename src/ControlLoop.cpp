@@ -26,14 +26,14 @@ constexpr double SMALL_SENSOR_MOMENT_DEAD_ZONE = 0.2;
 constexpr double LARGE_SENSOR_FORCE_DEAD_ZONE = 2.0;
 constexpr double LARGE_SENSOR_MOMENT_DEAD_ZONE = 0.5;
 
-// 1毫秒控制周期下的一阶低通滤波系数，当前约对应10赫兹截止频率。
+// 10HZ，若抖动继续jiang
 constexpr double FORCE_FILTER_ALPHA = 0.06;
 
 // 允许进入导纳控制的最大平移力和旋转力矩。
 constexpr double MAX_CONTROL_FORCE = 80.0;
 constexpr double MAX_CONTROL_MOMENT = 2.0;
 
-// 导纳速度上限，前三项单位为米每秒，第四项单位为弧度每秒。
+// 导纳速度上限m/s 弧度/s
 constexpr double MAX_X_VELOCITY = 0.05;
 constexpr double MAX_Y_VELOCITY = 0.05;
 constexpr double MAX_Z_VELOCITY = 0.03;
@@ -42,16 +42,12 @@ constexpr double MAX_ROTATION_VELOCITY = 0.174533;
 // ======================================================
 
 // 连续死区处理，避免越过死区边界时输出突然跳变。
-double apply_continuous_dead_zone(
-    double value,
-    double dead_zone) {
+double apply_continuous_dead_zone(double value,double dead_zone) {
     if (value > dead_zone) {return value - dead_zone;}
     if (value < -dead_zone) {return value + dead_zone;}
-    return 0.0;
-}
+    return 0.0;}
 
-// 停止关节跟踪接口只负责停止轨迹生成。这里继续确认控制器已经报告停止，
-// 并且四个有效关节的位置在一段时间内保持稳定，之后才允许下使能。
+// 停止关节跟踪接口只负责停止轨迹生成。这里继续确认控制器已经报告停止，并且四个有效关节的位置在一段时间内保持稳定，之后才允许下使能。
 bool wait_robot_stopped(std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     const auto required_stable_time = std::chrono::milliseconds(100);
@@ -96,7 +92,6 @@ bool wait_robot_stopped(std::chrono::milliseconds timeout) {
             // 运动状态重新变为运行，或者位置读取失败，重新开始计时。
             have_stable_reference = false;
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
@@ -105,15 +100,12 @@ bool wait_robot_stopped(std::chrono::milliseconds timeout) {
 
 bool wait_servo_enabled(std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-
     while (std::chrono::steady_clock::now() < deadline) {
         if (NRC_GetServoStatus() == 3) {
             return true;
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-
     return false;
 }
 
@@ -128,13 +120,11 @@ bool stop_and_power_off(AsyncLogger& logger) {
         logger.log("[错误] 等待机器人停稳超时，取消下使能，伺服保持使能\n");
         return false;
     }
-
     const int power_off_result = NRC_PowerOff();
     if (power_off_result != 0) {
         logger.log("[错误] 伺服下使能失败\n");
         return false;
     }
-
     logger.log("[控制] 机器人已经停稳，伺服已下使能\n");
     return true;
 }
@@ -155,8 +145,6 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
 
     MyRobotState init_s{};
     double base_x = 0.0, base_y = 0.0, base_z = 0.0;
-    //xiugai
-    // double base_t4 = 0.0
     double initial_total_rz = 0.0;
 
     enum ControlMode { MODE_POS, MODE_ROT };
@@ -375,20 +363,53 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             -MAX_CONTROL_MOMENT,
             std::min(ft.mz, MAX_CONTROL_MOMENT));
 
-        // 模式切换 (IO 1.1)
-        ControlMode target_mode = (NRC_ReadDigInByBoard(1, 1) == 1) ? MODE_ROT : MODE_POS;
+        
+        // 模式切换
+        ControlMode target_mode =
+            (NRC_ReadDigInByBoard(1, 1) == 1) ? MODE_ROT : MODE_POS;
+
         if (target_mode != current_mode) {
             current_mode = target_mode;
+
             logger.log(std::string("[模式] 已切换到") +
-                       (current_mode == MODE_ROT ? "旋转模式\n" : "位置模式\n"));
-            controller.set_state(last_target_tool, {0,0,0,0});
-            if (current_mode == MODE_ROT) { active_pos_lock = last_target_tool; locked_rz = curr_s.rz; }
+                    (current_mode == MODE_ROT ? "旋转模式\n" : "位置模式\n"));
+
+            // 计算真机当前位置相对于本轮力控起始位置的基座坐标偏移。
+            const double actual_dx = curr_s.x - base_x;
+            const double actual_dy = curr_s.y - base_y;
+            const double actual_dz = curr_s.z - base_z;
+
+            // 将真机实际基座坐标偏移转换成导纳控制器使用的工具坐标偏移。
+            const double c = std::cos(curr_s.rz);
+            const double s = std::sin(curr_s.rz);
+
+            Admittance4::Vec4 actual_tool = {
+                actual_dx * c - actual_dy * s,
+                actual_dx * s + actual_dy * c,
+                actual_dz,
+                curr_s.rz - initial_total_rz
+            };
+
+            // 将导纳虚拟位置同步到真机实际位置，并清零虚拟速度。
+            controller.set_state(actual_tool, {0, 0, 0, 0});
+            last_target_tool = actual_tool;
+
+            if (current_mode == MODE_ROT) {
+                // 旋转模式锁住切换瞬间的真机实际平移位置。
+                active_pos_lock = actual_tool;
+                locked_rz = curr_s.rz;
+            }
+            // 清除切换前的力信号残留，避免切换当周期产生跳动。
+            filtered_ft = SensorData{};
+            ft = SensorData{};
         }
+
         // if (current_mode == MODE_POS) ft.mz=0;
         if (current_mode == MODE_POS) 
         {
             ft.mz = 0;
-        }else{
+        }
+        else{
             ft.fx=0.0;
             ft.fy=0.0;
             ft.fz=0.0;
@@ -397,10 +418,14 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
         auto result = controller.update({ft.fx, ft.fy, ft.fz, ft.mz});
         Admittance4::Vec4 target_tool = result.first;
 
-        if (current_mode == MODE_ROT) { target_tool[0] = active_pos_lock[0]; target_tool[1] = active_pos_lock[1]; target_tool[2] = active_pos_lock[2]; }
+        if (current_mode == MODE_ROT) { 
+            target_tool[0] = active_pos_lock[0];
+            target_tool[1] = active_pos_lock[1]; 
+            target_tool[2] = active_pos_lock[2]; 
+        }
         last_target_tool = target_tool;
 
-        // 工具系转基座系投影
+        // 工具系转基座系投影，进逆解，逆解接口需要基坐标系下的位姿
         double angle = (current_mode == MODE_ROT) ? -locked_rz : -curr_s.rz;
         double dx = target_tool[0] * cos(angle) - target_tool[1] * sin(angle);
         double dy = target_tool[0] * sin(angle) + target_tool[1] * cos(angle);
