@@ -149,11 +149,12 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
 
     Admittance4::Vec4 last_target_tool = {0, 0, 0, 0};
     Admittance4::Vec4 active_pos_lock = {0, 0, 0, 0};
-    double locked_rz = 0.0;
     std::array<double, 7> target_joints{};
-    // 旋转模式下锁定关节0、1、2进入模式时的实际位置。
-    std::array<double, 3> rotation_locked_joints{0, 0, 0};
 
+    // 旋转模式下保存进入模式时四个关节的实际位置。
+    std::array<double, 4> rotation_locked_joints{0, 0, 0, 0};
+    // 记录进入旋转模式时的导纳旋转偏移，用于计算第4关节增量。
+    double rotation_start_tool_rz = 0.0;
     bool rotation_joint_lock_valid = false;
 
     std::thread force_feedback_thread([&running]() {
@@ -241,8 +242,7 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             rotation_joint_lock_valid = false;
             // 新一轮力控的平移锁定位置从零偏移开始。
             active_pos_lock = {0, 0, 0, 0};
-            // 保存当前末端旋转角度，供旋转模式坐标转换使用。
-            locked_rz = init_s.rz;
+
             controller.set_state({0,0,0,0}, {0,0,0,0});
             last_target_tool = {0,0,0,0};
             // 每次重新开启力控时，从零开始建立滤波状态。
@@ -289,14 +289,16 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             continue;
         }
 
-        // 如果开启力控时已经处于旋转模式，锁定当前前三个关节。
+        // 如果开启力控时已经处于旋转模式，先同步真机实际关节位置。
         if (current_mode == MODE_ROT && !rotation_joint_lock_valid) {
             rotation_locked_joints[0] = ref_acs.pos[0];
             rotation_locked_joints[1] = ref_acs.pos[1];
             rotation_locked_joints[2] = ref_acs.pos[2];
+            rotation_locked_joints[3] = ref_acs.pos[3];
+            rotation_start_tool_rz = last_target_tool[3];
             rotation_joint_lock_valid = true;
 
-            logger.log("[控制] 已锁定旋转模式前三个关节\n");
+            logger.log("[控制] 已同步真机状态，旋转模式只控制第4关节\n");
         }
 
         SensorData ft_da = read_force_sensor_da();
@@ -393,17 +395,16 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
             last_target_tool = actual_tool;
 
             if (current_mode == MODE_ROT) {
-                // 锁住切换瞬间的真机实际平移位置。
+                // 进入旋转模式时同步真机实际平移位置和四个关节位置。
                 active_pos_lock = actual_tool;
-                locked_rz = curr_s.rz;
-
-                // 锁住切换瞬间的前三个实际关节位置。
                 rotation_locked_joints[0] = ref_acs.pos[0];
                 rotation_locked_joints[1] = ref_acs.pos[1];
                 rotation_locked_joints[2] = ref_acs.pos[2];
+                rotation_locked_joints[3] = ref_acs.pos[3];
+                rotation_start_tool_rz = actual_tool[3];
                 rotation_joint_lock_valid = true;
             } else {
-                // 回到位置模式后，解除前三个关节锁定。
+                // 切回位置模式前已同步真机实际位姿，此处解除旋转关节锁定。
                 rotation_joint_lock_valid = false;
             }
             // 清除切换前的力信号残留，避免切换当周期产生跳动。
@@ -432,36 +433,54 @@ void RunControlLoop(AsyncLogger& logger, std::atomic<bool>& running) {
         }
         last_target_tool = target_tool;
 
-        
-
-        // 工具系转基座系投影：将导纳计算出的工具坐标系下的位移转换为基坐标系下的位移，进逆解，逆解接口需要基坐标系下的位姿
-        double angle = (current_mode == MODE_ROT) ? -locked_rz : -curr_s.rz;
-        double dx = target_tool[0] * cos(angle) - target_tool[1] * sin(angle);
-        double dy = target_tool[0] * sin(angle) + target_tool[1] * cos(angle);
-        const double target_total_rz = initial_total_rz + target_tool[3];
-
-        //得到基坐标系后进入逆解
-        NRC_Position ik_res;
-        if (!perform_ik(
-                ref_acs,
-                base_x + dx,
-                base_y + dy,
-                base_z + target_tool[2],
-                target_total_rz,
-                ik_res)) {
-            logger.log("[错误] 机器人逆解失败，关闭力控\n");
-            NRC_SetBoolVar(1, 0);
-            continue;
-        }
-
-        target_joints = {ik_res.pos[0],ik_res.pos[1],ik_res.pos[2],ik_res.pos[3],0,0,0};
-
-        /* 旋转模式只采用逆解得到的关节3目标，
-         关节0、1、2始终保持进入旋转模式时的位置。*/
         if (current_mode == MODE_ROT && rotation_joint_lock_valid) {
-            target_joints[0] = rotation_locked_joints[0];
-            target_joints[1] = rotation_locked_joints[1];
-            target_joints[2] = rotation_locked_joints[2];}
+            // 旋转模式不进行笛卡尔逆解，只将导纳旋转增量转换成第4关节角度。
+            const double rotation_delta_deg =
+                (target_tool[3] - rotation_start_tool_rz) * 180.0 / M_PI;
+
+            // 前三个关节保持进入旋转模式时的位置，第4关节从实际位置继续旋转。
+            target_joints = {
+                rotation_locked_joints[0],
+                rotation_locked_joints[1],
+                rotation_locked_joints[2],
+                rotation_locked_joints[3] + rotation_delta_deg,
+                0,
+                0,
+                0
+            };
+        } else {
+            // 位置模式将工具坐标偏移转换到基座坐标，再进行完整逆解。
+            const double angle = -curr_s.rz;
+            const double dx =
+                target_tool[0] * cos(angle) - target_tool[1] * sin(angle);
+            const double dy =
+                target_tool[0] * sin(angle) + target_tool[1] * cos(angle);
+            const double target_total_rz =
+                initial_total_rz + target_tool[3];
+
+            NRC_Position ik_res;
+            if (!perform_ik(
+                    ref_acs,
+                    base_x + dx,
+                    base_y + dy,
+                    base_z + target_tool[2],
+                    target_total_rz,
+                    ik_res)) {
+                logger.log("[错误] 机器人逆解失败，关闭力控\n");
+                NRC_SetBoolVar(1, 0);
+                continue;
+            }
+
+            target_joints = {
+                ik_res.pos[0],
+                ik_res.pos[1],
+                ik_res.pos[2],
+                ik_res.pos[3],
+                0,
+                0,
+                0
+            };
+        }
 
         /*关节限位保护。*/ 
         if (target_joints[0] < -44 || target_joints[0] > 44 ||
